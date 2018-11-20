@@ -1,50 +1,267 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-
-using System.Net;
-using System.Threading;
-using System.Net.Sockets;
-
-using System.Media;
-
 namespace SIPLib
 {
     public delegate void Del(string Info, string Caption);
     public delegate bool DelRequest(string str);
     public delegate void DelCloseSession(string Name);
     public delegate void DelStopListener();
-    /// <summary>
-    /// Класс сессии
-    /// </summary>
-    public class Session    //сама сессия
-    {
-        DelCloseSession DelClosesession;
-        string ToIP;
-        string ToUser;
-        string MyName;
-        System.Net.IPAddress myIP;
-        int n = 0;
-        int port, myaudioport, toaudioport;
-        bool SessionConfirmed = false; 
-        string SessionID;
-        string _SDP;
-        Thread WaitForAnswer;
 
-      
-        /// <summary>
-        /// Конструктор сессии
-        /// </summary>
-        /// <param name="myIP">IP адресанта</param>
-        /// <param name="myPort">Порт адресанта</param>
-        /// <param name="ToIP">Порт адресата</param>
-        /// <param name="ToUser">Имя адресата</param>
-        /// <param name="FromUser">Имя адресанта</param>
-        /// <param name="d1">Делегат на вызов функции закрытия текущей сессии</param>
-        /// <param name="ID">ID сессии</param>
-        /// <param name="SDPfunc">Запрос SDP</param>
-        public Session(System.Net.IPAddress myIP, int myPort, string ToIP, string ToUser, string FromUser, DelCloseSession d1, string ID, string SDPfunc)
+    public class Session
+    {
+        private global::SIPLib.DelCloseSession DelClosesession;
+        private string ToIP;
+        private string ToUser;
+        private string MyName;
+        private global::System.Net.IPAddress myIP;
+        private int n;
+        private int port;
+        private int myaudioport;
+        private int toaudioport;
+        private bool SessionConfirmed = false;
+        private string SessionID;
+        private string _SDP;
+        private global::System.Threading.Thread WaitForAnswer;
+        public string _ToUser { get { return this.ToUser; } }
+        public bool _SessionConfirmed { get { return this.SessionConfirmed; } }
+        public string _SessionID { get { return this.SessionID; } }
+        public bool CheckSessionByID(string ID) { if (this.SessionID == ID) { return true; } else { return false; } }
+        public void CloseSession() { this.DelClosesession(this.MyName); }
+
+        public bool WatchInfo(string Info)
+        {
+            this.n++;
+            if (Info.Contains("BYE")) { this.BYEDecompile(Info); return true; }
+            else if (Info.Contains("ACK")) { this._2XXCompile("00", true, false); return true; }
+            else if (Info.Contains("CANCEL")) { return true; }
+            else if (Info.Contains("REGISTER")) { return true; }
+            else if (Info.Contains("OPTIONS")) { this._2XXCompile("00", true, false); return true; }
+            else if (Info.Contains("SIP/2.0 1")) { return true; }
+            else if (Info.Contains("SIP/2.0 2")) { return true; }
+            else if (Info.Contains("SIP/2.0 3")) { return true; }
+            else if (Info.Contains("SIP/2.0 5")) { this._5XXDecompile(Info); return true; }
+            else if (Info.Contains("SIP/2.0 6")) { this._6XXDecompile(Info); return true; }
+            return false;
+        }
+
+        private bool SendInfo(string Info)
+        {
+            global::System.Net.IPAddress ipAddress;
+            global::System.Net.Sockets.UdpClient udpClient = new global::System.Net.Sockets.UdpClient();
+            byte[] sendBytes = global::System.Text.Encoding.ASCII.GetBytes(Info);
+            if (global::System.Net.IPAddress.TryParse(ToIP, out ipAddress)) { try { udpClient.Send(sendBytes, sendBytes.Length, new global::System.Net.IPEndPoint(ipAddress, port)); } catch { return false; } }
+            else
+            {
+                global::System.Net.IPAddress[] ips = global::System.Net.Dns.GetHostAddresses(ToIP);
+                foreach (global::System.Net.IPAddress ip in ips) { try { udpClient.Send(sendBytes, sendBytes.Length, new global::System.Net.IPEndPoint(ip, port)); } catch { return false; } }
+                if (ips.Length == 0) { return false; }
+            };
+            return true;
+        }
+
+        private void WaitForAnswerFunc()
+        {
+            for (int i = 0; i < 300; i++)
+            {
+                global::System.Threading.Thread.Sleep(100);
+                if (this._SessionConfirmed == true) { return; }
+            }
+            this.CloseSession();
+        }
+
+        public void Invite()
+        {
+            string Request = "INVITE sip: " + this.ToUser + "@" + this.ToIP + " SIP/2.0 " + "\n";
+            Request += "Record-Route: <sip:" + this.ToUser + "@" + this.myIP.ToString() + ";lr>" + "\n";
+            Request += "From: " + "\"" + this.MyName + "\"" + "<sip: " + this.MyName + "@" + this.myIP.ToString() + "> " + "\n";
+            Request += "To: " + "<sip: " + this.ToUser + "@" + this.ToIP + "> " + "\n";
+            Request += "Call-ID: " + this.SessionID + "@" + this.myIP + "\n";
+            Request += "CSeq: " + (this.n).ToString() + " INVITE" + "\n";
+            Request += "Date: " + global::System.DateTime.Now.ToString() + "\n";
+            Request += "Allow: INVITE, ACK, CANCEL, BYE" + "\n";
+            Request += this._SDP;
+            this.SendInfo(Request);
+            this.WaitForAnswer = new global::System.Threading.Thread(this.WaitForAnswerFunc);
+            this.WaitForAnswer.Start();
+        }
+
+        public void BYECompile()
+        {
+            string Request = "BYE sip: " + this.ToUser + "@" + this.ToIP + " SIP/2.0 " + "\n";
+            Request += "Record-Route: <sip:" + this.ToUser + "@" + this.myIP.ToString() + ";lr>" + "\n";
+            Request += "From: " + "\"" + this.MyName + "\"" + " <sip: " + this.MyName + "@" + this.myIP.ToString() + "> " + "\n";
+            Request += "To: " + "<sip: " + this.ToUser + "@" + this.ToIP + "> " + "\n";
+            Request += "Call-ID: " + this.SessionID + "@" + this.myIP + "\n";
+            Request += "CSeq:" + (++this.n).ToString() + " BYE" + "\n";
+            Request += "Date: " + global::System.DateTime.Now.ToString() + "\n";
+            this.SendInfo(Request);
+            this.DelClosesession(this.ToUser);
+        }
+
+        private string SDP()
+        {
+            string tmp = "v=0\n";
+            tmp += "o=" + this.MyName + n.ToString() + "m" + "a" + this.SessionID + "IN IP4" + this.myIP.ToString() + "\n";
+            tmp += "c=IN IP4 " + this.myIP.ToString() + "\n";
+            tmp += "m=audio " + this.myaudioport.ToString() + " RTP/AVP 0\n";
+            tmp += "a=rtpmap:0 PCMU/8000\n";
+            tmp = "Content-Type: application/sdp\nContent-Length: " + tmp.Length + "\n\n" + tmp;
+            return tmp;
+        }
+
+        private void BYEDecompile(string Info)
+        {
+            this._2XXCompile("00", false, true);
+            this.CloseSession();
+        }
+
+        public void _1XXCompile(string _XX)
+        {
+            string Request = "SIP/2.0 1";
+            switch (_XX)
+            {
+                case "80": Request += _XX + " Ringing\n"; break;
+                default: return;
+            }
+            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
+            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
+            Request += this.SessionID + "\n";
+            Request += "Cseq: " + (++this.n).ToString();
+            switch (_XX)
+            {
+                case "80": Request += _XX + " Ringing\n"; break;
+                default: return;
+            }
+            Request += "Date: " + global::System.DateTime.Now.ToString();
+            this.SendInfo(Request);
+        }
+
+        public void _2XXCompile(string _XX, bool SDPRequired, bool EndSession)
+        {
+            string Request = "SIP/2.0 2" + _XX + " OK" + "\n";
+            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
+            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
+            Request += this.SessionID + "\n";
+            Request += "Cseq: " + (++this.n).ToString() + " OK" + "\n";
+            Request += "Date: " + global::System.DateTime.Now.ToString() + "\n";
+            if (SDPRequired) { Request += this._SDP; }
+            this.SendInfo(Request);
+            if (EndSession) { this.CloseSession(); }
+        }
+
+        public void _3XXCompile(string _XX, bool SDPRequired, bool EndSession)
+        {
+            string Request = "SIP/2.0 3";
+            switch (_XX)
+            {
+                case "00": Request += _XX + " Multiple Choices\n"; break;
+                case "01": Request += _XX + " Moved Permanently\n"; break;
+                case "02": Request += _XX + " Moved Temporary\n"; break;
+                default: return;
+            }
+            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
+            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
+            Request += this.SessionID + "\n";
+            Request += "Cseq: " + (++this.n).ToString();
+            switch (_XX)
+            {
+                case "00": Request += _XX + " Multiple Choices\n"; break;
+                case "01": Request += _XX + " Moved Permanently\n"; break;
+                case "02": Request += _XX + " Moved Temporary\n"; break;
+                default: return;
+            }
+            Request += "Date: " + global::System.DateTime.Now.ToString() + "\n";
+            if (SDPRequired) { Request += "\n" + this.SDP(); }
+            this.SendInfo(Request);
+            if (EndSession) { this.CloseSession(); }
+        }
+
+        public void _5XXCompile(string _XX, bool SDPRequired, bool EndSession)
+        {
+            string Request = "SIP/2.0 5";
+            switch (_XX)
+            {
+                case "00": Request += _XX + " Server Internal Error\n"; break;
+                case "01": Request += _XX + " Not Implemented\n"; break;
+                case "02": Request += _XX + " Bad Gateway\n"; break;
+                case "03": Request += _XX + " Service Unavailable\n"; break;
+                default: Request += "01 Not Implemented\n"; break;
+            }
+            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
+            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
+            Request += this.SessionID + "\n";
+            Request += "Cseq: " + (++this.n).ToString();
+            switch (_XX)
+            {
+                case "00": Request += _XX + " Server Internal Error\n"; break;
+                case "01": Request += _XX + " Not Implemented\n"; break;
+                case "02": Request += _XX + " Bad Gateway\n"; break;
+                case "03": Request += _XX + " Service Unavailable\n"; break;
+                default: Request += "01 Not Implemented\n"; break;
+            }
+            Request += "Date: " + global::System.DateTime.Now.ToString() + "\n";
+            if (SDPRequired) { Request += "\n" + this.SDP(); }
+            SendInfo(Request);
+            if (EndSession) { this.CloseSession(); }
+        }
+
+        public void _5XXDecompile(string Info) { this._2XXCompile("00", false, false); }
+
+        public void _6XXCompile(string _XX, bool SDPRequired, bool EndSession)
+        {
+            string Request = "SIP/2.0 6";
+            switch (_XX)
+            {
+                case "00": Request += _XX + " Busy Everywhere\n"; break;
+                case "03": Request += _XX + " Decline\n"; break;
+                case "04": Request += _XX + " Does Not Exist Anywhere\n"; break;
+                case "06": Request += _XX + " Not Acceptable\n"; break;
+                default: Request += "03 Decline\n"; break;
+            }
+            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
+            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
+            Request += this.SessionID + "\n";
+            Request += "Cseq: " + (++this.n).ToString();
+            switch (_XX)
+            {
+                case "00": Request += _XX + " Busy Everywhere\n"; break;
+                case "03": Request += _XX + " Decline\n"; break;
+                case "04": Request += _XX + " Does Not Exist Anywhere\n"; break;
+                case "06": Request += _XX + " Not Acceptable\n"; break;
+                default: Request += "03 Decline\n"; break;
+            }
+            Request += "Date: " + global::System.DateTime.Now.ToString() + "\n";
+            if (SDPRequired) { Request += "\n" + this.SDP(); }
+            this.SendInfo(Request);
+            if (EndSession) { this.CloseSession(); }
+        }
+
+        public void _6XXDecompile(string Info)
+        {
+            this._2XXCompile("00", false, true);
+            this.CloseSession();
+        }
+
+        private string SDPcombine(string str)
+        {
+            string tmp = "v=0\n";
+            tmp += "o=" + n.ToString() + "m" + "a" + SessionID.ToString() + "IN IP4" + myIP + "\n";
+            tmp += "c=IN IP4 " + myIP + "\n";
+            string[] ms = str.Split('\n');
+            foreach (string str1 in ms)
+            {
+                if (str1.Contains("m=audio"))
+                {
+                    tmp += str1 + "\n";
+                    string tmp1 = str1.Remove(0, str1.IndexOf("audio ") + "audio ".Length);
+                    tmp1 = tmp1.Remove(tmp1.IndexOf(" RTP"));
+                    this.toaudioport = global::System.Convert.ToInt32(tmp1);
+                }
+                if (str1.Contains("PCMU/8000")) tmp += str1 + "\n";
+            }
+            tmp = "Content-Type: application/sdp\nContent-Length: " + tmp.Length + "\n\n" + tmp;
+            return tmp;
+        }
+
+        public Session(global::System.Net.IPAddress myIP, int myPort, string ToIP, string ToUser, string FromUser, global::SIPLib.DelCloseSession d1, string ID, string SDPfunc)
         {
             this.ToIP = ToIP;
             this.ToUser = ToUser;
@@ -53,650 +270,75 @@ namespace SIPLib
             this.port = myPort;
             this.myaudioport = 11010;
             this.SessionID = ID;
-            DelClosesession = d1;
-            n++;
-
-            if (SDPfunc.Length != 0)
-            {
-                this._SDP = SDPcombine(SDPfunc);
-            }
-            else
-            {
-                this._SDP = SDP();
-            }
-        }
-
-        //==============внешние функции==============
-        /// <summary>
-        /// Интерфейс получения имени собеседника
-        /// </summary>
-        public string _ToUser
-        {
-            get
-            {
-                return ToUser;
-            }
-        }
-        /// <summary>
-        /// Функция закрытия сессии
-        /// </summary>
-        public void CloseSession()
-        {
-            DelClosesession(this.MyName);
-        }
-        /// <summary>
-        /// Интерфейс подтверждённости сессии (сессия была принята или на неё как-либо иначе отреагировали)
-        /// </summary>
-        public bool _SessionConfirmed
-        {
-            get
-            {
-                return SessionConfirmed;
-            }
-        }
-        /// <summary>
-        /// Интерфейс получения ID сессии
-        /// </summary>
-        public string _SessionID
-        {
-            get
-            {
-                return this.SessionID;
-            }
-        }
-        /// <summary>
-        /// Функция проверки сессии по ID (не используется, т.к. предусмотрена для конференц связи)
-        /// </summary>
-        /// <param name="ID">Подаваемый ID</param>
-        /// <returns>Если ID сессии совпадает с подаваемым - возвратит true, иначе - false</returns>
-        public bool CheckSessionByID(string ID)
-        {
-            if (this.SessionID == ID) return true;
-            else return false;
-        }
-        /// <summary>
-        /// Функция разбора запроса (ответа)
-        /// </summary>
-        /// <param name="Info">Подаваемый запрос в виде строки</param>
-        /// <returns>Если запрос (ответ) был распознан - возвратит true, иначе - false</returns>
-        public bool WatchInfo(string Info)
-        {
+            this.DelClosesession = d1;
             this.n++;
-
-            if (Info.Contains("BYE"))
-            {
-                BYEDecompile(Info);
-                return true;
-            }
-
-            if (Info.Contains("ACK"))
-            {
-                _2XXCompile("00", true, false);
-                return true;
-            }
-
-            if (Info.Contains("CANCEL"))
-            {
-
-                return true;
-            }
-
-            if (Info.Contains("REGISTER"))
-            {
-
-                return true;
-            }
-
-            if (Info.Contains("OPTIONS"))
-            {
-                _2XXCompile("00", true, false);
-                return true;
-            }
-
-            if (Info.Contains("SIP/2.0 1"))
-            {
-                return true;
-            }
-
-            if (Info.Contains("SIP/2.0 2"))
-            {
-                this._2XXDecompile(Info);
-                return true;
-            }
-
-            if (Info.Contains("SIP/2.0 3"))
-            {
-                this._3XXDecompile(Info);
-                return true;
-            }
-
-            if (Info.Contains("SIP/2.0 5"))
-            {
-                this._5XXDecompile(Info);
-                return true;
-            }
-
-            if (Info.Contains("SIP/2.0 6"))
-            {
-                this._6XXDecompile(Info);
-                return true;
-            }
-
-            return false;
-        }
-
-        //==============внутренние функции==============
-        /// <summary>
-        /// Функция отправки пакета данных, оформленного в виде строки
-        /// </summary>
-        /// <param name="Info">Отправляемая строка</param>
-        /// <returns>Если true - отправка информации прошла успешно, иначе - false.</returns>
-        bool SendInfo(string Info)
-        {
-            System.Net.IPAddress ipAddress;
-            UdpClient udpClient = new UdpClient();
-
-            Byte[] sendBytes = Encoding.ASCII.GetBytes(Info);
-
-            if (System.Net.IPAddress.TryParse(ToIP, out ipAddress))
-            {
-                System.Net.IPEndPoint ipEndPoint = new System.Net.IPEndPoint(ipAddress, port);
-
-                try
-                {
-                    udpClient.Send(sendBytes, sendBytes.Length, ipEndPoint);
-                }
-                catch (Exception)
-                {
-                    return false;
-                }
-            }
-            else
-            {
-                IPAddress[] ips;
-                ips = Dns.GetHostAddresses(ToIP);
-                foreach (IPAddress ip in ips)
-                {
-                    System.Net.IPEndPoint ipEndPoint = new System.Net.IPEndPoint(ip, port);
-
-                    try
-                    {
-                        udpClient.Send(sendBytes, sendBytes.Length, ipEndPoint);
-                    }
-                    catch (Exception)
-                    {
-                        return false;
-                    }
-                }
-                if (ips.Length == 0) return false;
-            };
-
-            return true;
-        }
-        /// <summary>
-        /// Функция проверки активности сессии
-        /// </summary>
-        void WaitForAnswerFunc()
-        {
-            for (int i = 0; i < 300; i++)
-            {
-                Thread.Sleep(100);
-                if (_SessionConfirmed == true) return;
-            }
-            this.CloseSession();
-        }
-
-        /// <summary>
-        /// Функция отправки приглашения на установление связи
-        /// </summary>
-        public void Invite()
-        {
-            string Request = "";
-
-            Request += "INVITE sip: " + this.ToUser + "@" + this.ToIP + " SIP/2.0 " + "\n";
-            Request += "Record-Route: <sip:" + this.ToUser + "@" + this.myIP.ToString() + ";lr>" + "\n";
-            Request += "From: " + "\"" + this.MyName + "\"" + "<sip: " + this.MyName + "@" + this.myIP.ToString() + "> " + "\n";
-            Request += "To: " + "<sip: " + this.ToUser + "@" + this.ToIP + "> " + "\n";
-            Request += "Call-ID: " + SessionID + "@" + this.myIP + "\n";
-            Request += "CSeq: " + (this.n).ToString() + " INVITE" + "\n";
-
-            Request += "Date: " + DateTime.Now.ToString() + "\n";   //дата и время
-            Request += "Allow: INVITE, ACK, CANCEL, BYE" + "\n";
-
-            Request += _SDP;
-
-            SendInfo(Request);
-
-            WaitForAnswer = new Thread(WaitForAnswerFunc);
-            WaitForAnswer.Start();
-
-        }
-        /// <summary>
-        /// Функция создания и отправки запроса BYE
-        /// </summary>
-        public void BYECompile()
-        {
-            string Request = "";
-
-            Request += "BYE sip: " + this.ToUser + "@" + this.ToIP + " SIP/2.0 " + "\n";
-            Request += "Record-Route: <sip:" + this.ToUser + "@" + this.myIP.ToString() + ";lr>" + "\n";
-            Request += "From: " + "\"" + this.MyName + "\"" + " <sip: " + this.MyName + "@" + this.myIP.ToString() + "> " + "\n";
-            Request += "To: " + "<sip: " + this.ToUser + "@" + this.ToIP + "> " + "\n";
-            Request += "Call-ID: " + SessionID + "@" + this.myIP + "\n";
-            Request += "CSeq:" + (++this.n).ToString() + " BYE" + "\n";
-
-            Request += "Date: " + DateTime.Now.ToString() + "\n";   //дата и время
-
-            SendInfo(Request);
-            DelClosesession(ToUser);
-
-        }
-        /// <summary>
-        /// Функция ответа на запрос BYE
-        /// </summary>
-        /// <param name="Info">Предлагаемый запрос</param>
-        void BYEDecompile(string Info)
-        {
-            this._2XXCompile("00", false, true);
-            this.CloseSession();
-        }
-
-        /// <summary>
-        /// Функция создания ответа категории 1XX. XX - комбинация внутри категории
-        /// </summary>
-        /// <param name="_XX">Комбинация внутри категории</param>
-        public void _1XXCompile(string _XX)
-        {
-            string Request = "";
-            Request += "SIP/2.0 1";
-            switch (_XX)
-            {
-                case "80": Request += _XX + " Ringing\n"; break;
-                default: return;
-            }
-
-            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
-            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
-            Request += this.SessionID.ToString() + "\n";
-            Request += "Cseq: " + (++this.n).ToString();
-            switch (_XX)
-            {
-                case "80": Request += _XX + " Ringing\n"; break;
-                default: return;
-            }
-
-            Request += "Date: " + DateTime.Now.ToString();
-            SendInfo(Request);
-        }
-        /// <summary>
-        /// Функция создания ответа категории 2XX. XX - комбинация внутри категории
-        /// </summary>
-        /// <param name="_XX">Комбинация внутри категории</param>
-        /// <param name="SDPRequired">Флаг необходимости прикрепления SDP информации</param>
-        /// <param name="EndSession">Флаг необходимости закончить сессию после отправки данного запроса</param>
-        public void _2XXCompile(string _XX, bool SDPRequired, bool EndSession)
-        {
-            string Request = "";
-            Request += "SIP/2.0 2" + _XX + " OK" + "\n";
-            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
-            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
-            Request += this.SessionID.ToString() + "\n";
-            Request += "Cseq: " + (++this.n).ToString() + " OK" + "\n";
-            Request += "Date: " + DateTime.Now.ToString() + "\n";
-            if (SDPRequired)
-            {
-                Request += _SDP;
-            }
-            SendInfo(Request);
-
-            if (EndSession)
-                this.CloseSession();
-        }
-        /// <summary>
-        /// Функция разбора запроса категории 2XX
-        /// </summary>
-        /// <param name="Info">Подаваемый запрос</param>
-        void _2XXDecompile(string Info)
-        {
-
-        }
-
-        /// <summary>
-        /// Функция создания ответа категории 3XX. XX - комбинация внутри категории
-        /// </summary>
-        /// <param name="_XX">Комбинация внутри категории</param>
-        /// <param name="SDPRequired">Флаг необходимости прикрепления SDP информации</param>
-        /// <param name="EndSession">Флаг необходимости закончить сессию после отправки данного запроса</param>
-        public void _3XXCompile(string _XX, bool SDPRequired, bool EndSession)
-        {
-            string Request = "";
-            Request += "SIP/2.0 3";
-            switch (_XX)
-            {
-                case "00": Request += _XX + " Multiple Choices\n"; break;
-                case "01": Request += _XX + " Moved Permanently\n"; break;
-                case "02": Request += _XX + " Moved Temporary\n"; break;
-                default: return;
-            }
-
-            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
-            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
-            Request += this.SessionID.ToString() + "\n";
-            Request += "Cseq: " + (++this.n).ToString();// " Decline" + "\n";
-            switch (_XX)
-            {
-                case "00": Request += _XX + " Multiple Choices\n"; break;
-                case "01": Request += _XX + " Moved Permanently\n"; break;
-                case "02": Request += _XX + " Moved Temporary\n"; break;
-                default: return;
-            }
-
-            Request += "Date: " + DateTime.Now.ToString() + "\n";
-            if (SDPRequired)
-                Request += "\n" + SDP();
-
-            SendInfo(Request);
-
-            if (EndSession)
-                this.CloseSession();
-        }
-        /// <summary>
-        /// Функция разбора запроса категории 3XX
-        /// </summary>
-        /// <param name="Info">Подаваемый запрос</param>
-        public void _3XXDecompile(string Info)
-        {
-        }
-        /// <summary>
-        /// Функция создания ответа категории 5XX. XX - комбинация внутри категории
-        /// </summary>
-        /// <param name="_XX">Комбинация внутри категории</param>
-        /// <param name="SDPRequired">Флаг необходимости прикрепления SDP информации</param>
-        /// <param name="EndSession">Флаг необходимости закончить сессию после отправки данного запроса</param>
-        public void _5XXCompile(string _XX, bool SDPRequired, bool EndSession)
-        {
-            string Request = "";
-            Request += "SIP/2.0 5";
-            switch (_XX)
-            {
-                case "00": Request += _XX + " Server Internal Error\n"; break;
-                case "01": Request += _XX + " Not Implemented\n"; break;
-                case "02": Request += _XX + " Bad Gateway\n"; break;
-                case "03": Request += _XX + " Service Unavailable\n"; break;
-                default: Request += "01 Not Implemented\n"; break;
-            }
-
-            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
-            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
-            Request += this.SessionID.ToString() + "\n";
-            Request += "Cseq: " + (++this.n).ToString();// " Decline" + "\n";
-            switch (_XX)
-            {
-                case "00": Request += _XX + " Server Internal Error\n"; break;
-                case "01": Request += _XX + " Not Implemented\n"; break;
-                case "02": Request += _XX + " Bad Gateway\n"; break;
-                case "03": Request += _XX + " Service Unavailable\n"; break;
-                default: Request += "01 Not Implemented\n"; break;
-            }
-
-            Request += "Date: " + DateTime.Now.ToString() + "\n";
-            if (SDPRequired)
-                Request += "\n" + SDP();
-
-            SendInfo(Request);
-
-            if (EndSession)
-                this.CloseSession();
-
-        }
-        /// <summary>
-        /// Функция разбора запроса категории 3XX
-        /// </summary>
-        /// <param name="Info">Подаваемый запрос</param>
-        public void _5XXDecompile(string Info)
-        {
-            this._2XXCompile("00", false, false);
-        }
-        /// <summary>
-        /// Функция создания ответа категории 6XX. XX - комбинация внутри категории
-        /// </summary>
-        /// <param name="_XX">Комбинация внутри категории</param>
-        /// <param name="SDPRequired">Флаг необходимости прикрепления SDP информации</param>
-        /// <param name="EndSession">Флаг необходимости закончить сессию после отправки данного запроса</param>
-        public void _6XXCompile(string _XX, bool SDPRequired, bool EndSession)
-        {
-            string Request = "";
-            Request += "SIP/2.0 6";
-            switch (_XX)
-            {
-                case "00": Request += _XX + " Busy Everywhere\n"; break;
-                case "03": Request += _XX + " Decline\n"; break;
-                case "04": Request += _XX + " Does Not Exist Anywhere\n"; break;
-                case "06": Request += _XX + " Not Acceptable\n"; break;
-                default: Request += "03 Decline\n"; break;
-            }
-
-            Request += "From: " + this.MyName + " <sip:" + this.MyName + "@" + this.myIP.ToString() + ">" + "\n";
-            Request += "To: <sip: " + this.ToUser + "@" + this.ToIP + ">" + "\n";
-            Request += this.SessionID.ToString() + "\n";
-            Request += "Cseq: " + (++this.n).ToString();// " Decline" + "\n";
-            switch (_XX)
-            {
-                case "00": Request += _XX + " Busy Everywhere\n"; break;
-                case "03": Request += _XX + " Decline\n"; break;
-                case "04": Request += _XX + " Does Not Exist Anywhere\n"; break;
-                case "06": Request += _XX + " Not Acceptable\n"; break;
-                default: Request += "03 Decline\n"; break;
-            }
-
-            Request += "Date: " + DateTime.Now.ToString() + "\n";
-
-            if (SDPRequired)
-                Request += "\n" + SDP();
-
-            SendInfo(Request);
-
-            if (EndSession)
-                this.CloseSession();
-
-        }
-        /// <summary>
-        /// Функция разбора запроса категории 6XX
-        /// </summary>
-        /// <param name="Info">Подаваемый запрос</param>
-        public void _6XXDecompile(string Info)
-        {
-            this._2XXCompile("00", false, true);
-            this.CloseSession();
-        }
-
-        //==================================================\\
-        //                      SDP                         \\
-        //==================================================\\
-        /// <summary>
-        /// Функция получения информации для SDP протокола
-        /// </summary>
-        /// <returns></returns>
-        string SDP()
-        {
-            string CodecInfo = "", tmp = "";
-            CodecInfo += "Content-Type: application/sdp\n";
-
-            tmp += "v=0\n";
-            tmp += "o=" + MyName + n.ToString() + "m" +"a" + SessionID.ToString() + "IN IP4" + myIP + "\n";
-            tmp += "c=IN IP4 " + myIP + "\n";
-            tmp += "m=audio " + this.myaudioport.ToString() + " RTP/AVP 0\n";
-            tmp += "a=rtpmap:0 PCMU/8000\n";
-
-            CodecInfo += "Content-Length: " + tmp.Length + "\n\n" + tmp;
-
-            return CodecInfo;
-        }
-        /// <summary>
-        /// Функция пересечения имеющейся SDP и поступаемой 
-        /// </summary>
-        /// <param name="str">Поступаемая SDP</param>
-        /// <returns>Результат пересечения</returns>
-        string SDPcombine(string str)
-        {
-            string CodecInfo = "", tmp = "", tmp1 = "";
-            CodecInfo += "Content-Type: application/sdp\n";
-            tmp += "v=0\n";
-            tmp += "o=" + n.ToString() + "m" + "a" + SessionID.ToString() + "IN IP4" + myIP + "\n";
-            tmp += "c=IN IP4 " + myIP + "\n";
-
-            string[] ms = str.Split('\n');
-            foreach (string str1 in ms)
-            {
-                if (str1.Contains("m=audio"))
-                {
-                    tmp += str1 + "\n";
-                    tmp1 = str1.Remove(0, str1.IndexOf("audio ") + "audio ".Length);
-                    tmp1 = tmp1.Remove(tmp1.IndexOf(" RTP"));
-                    this.toaudioport = Convert.ToInt32(tmp1);
-                }
-                if (str1.Contains("PCMU/8000")) tmp += str1 + "\n";
-            }
-
-            CodecInfo += "Content-Length: " + tmp.Length + "\n\n" + tmp;
-            return CodecInfo;
+            if (SDPfunc.Length != 0) { this._SDP = this.SDPcombine(SDPfunc); } else { this._SDP = this.SDP(); }
         }
     }
 
-    //=======================================================================================================================
-    //=======================================================================================================================
-    //=======================================================================================================================
-
-    public class Listener   //прослушиватель
+    public class Listener
     {
+        private static global::SIPLib.DelRequest DelRequest1;
+        private static global::SIPLib.DelCloseSession DelClosesession;
+        private static global::SIPLib.DelStopListener Delstoplistener;
+        private static global::SIPLib.Del DelOutput;
+        private string host = global::System.Net.Dns.GetHostName();
+        private static object LockListen = new object();
+        private global::System.Net.IPAddress myIP;
+        private static global::System.Threading.Mutex Mut = new global::System.Threading.Mutex();
+        private global::System.Threading.Thread ThreadListen;
+        private static int port;
+        private static double LastSessionID = 0;
+        private static string myName;
+        private static bool StopFlag = false;
+        public static global::System.Collections.Generic.List<global::SIPLib.Session> Sessions = new global::System.Collections.Generic.List<global::SIPLib.Session>();
+        public bool CheckSessionExistance(string str) { foreach (global::SIPLib.Session s in Sessions) { if (str == s._ToUser) return true; } return false; }
+        private void CloseSession(string name) { global::SIPLib.Listener.Sessions.Clear(); }
+        private static global::SIPLib.Session Last() { return ((global::SIPLib.Listener.Sessions != null && global::SIPLib.Listener.Sessions.Count > 0) ? global::SIPLib.Listener.Sessions[global::SIPLib.Listener.Sessions.Count - 1] : null); }
 
-        //==============переменные==============
-        static DelRequest DelRequest1;  //делегат на запрос принятия приглашения
-        static DelCloseSession DelClosesession;
-        static DelStopListener Delstoplistener;
-        static Del DelOutput;
-        String host = System.Net.Dns.GetHostName();
-        static Object LockListen = new Object();
-        System.Net.IPAddress myIP;  //наш IP
-
-        static System.Threading.Mutex Mut = new Mutex();
-        Thread ThreadListen;    //поток для прослушки
-        static int port;        //номер используемого порта
-
-        static double LastSessionID = 0;
-        static string myName;   //имя пользователя
-        static bool StopFlag = false;
-
-        static public List<Session> Sessions = new List<Session>();
-        //==============конструкторы==============
-
-        /// <summary>
-        /// Конструктор прослушивателя
-        /// </summary>
-        /// <param name="newport">Порт прослушки (не помню точно :) )</param>
-        /// <param name="d1">Делегат на вызов запроса подтверждения приходящего вызова</param>
-        /// <param name="name">Наше имя</param>
-        /// <param name="d2">Делегат на закрытие сессии</param>
-        public Listener(int newport, DelRequest d1, string name, DelCloseSession d2, Del OUT, DelStopListener DelSL)
-        {
-            DelRequest1 = d1;
-            DelClosesession = d2;
-            DelOutput = OUT;
-            DelClosesession += CloseSession;
-            Delstoplistener = DelSL;
-            StopFlag = false;
-
-            myName = name;
-
-            myIP = System.Net.Dns.GetHostByName(host).AddressList[0];
-            port = newport;
-            ThreadListen = new Thread(ListenSockets);
-            ThreadListen.Start();
-
-        }
-
-        //==============внешние функции==============
-        /// <summary>
-        /// Отправка звонка пользователю
-        /// </summary>
-        /// <param name="ToIP">IP получателя</param>
-        /// <param name="ToUser">Имя получателя</param>
-        /// <param name="FromUser">Имя отправителя</param>
         public void MakeCall(string ToIP, string ToUser, string FromUser)
         {
-            Sessions.Add(new Session(myIP, port, ToIP, ToUser, FromUser, DelClosesession, (LastSessionID++).ToString(), ""));
-            Sessions.Last().Invite();
+            global::SIPLib.Listener.Sessions.Add(new global::SIPLib.Session(this.myIP, global::SIPLib.Listener.port, ToIP, ToUser, FromUser, global::SIPLib.Listener.DelClosesession, (global::SIPLib.Listener.LastSessionID++).ToString(), string.Empty));
+            global::SIPLib.Listener.Last().Invite();
         }
-        /// <summary>
-        /// Завершение разговора
-        /// </summary>
-        /// <param name="ToUser">Имя собеседника</param>
-        /// <param name="FromUser">Имя завершающего</param>
+
         public void EndCall()
         {
-            foreach (Session s in Sessions)
+            foreach (global::SIPLib.Session s in global::SIPLib.Listener.Sessions)
             {
                 s.BYECompile();
-                Thread.Sleep(100);
-                Sessions.Remove(s);
+                global::System.Threading.Thread.Sleep(100);
+                global::SIPLib.Listener.Sessions.Remove(s);
                 break;
             }
         }
-        /// <summary>
-        /// Проверка на наличие подобной сессии
-        /// </summary>
-        /// <param name="str">Имя собеседника</param>
-        /// <returns>Если такая сессия существует - вернёт true, иначе - false</returns>
-        public bool CheckSessionExistance(string str)
-        {
-            foreach (Session s in Sessions)
-            {
-                if (str == s._ToUser) return true;
-            }
-            return false;
-        }
 
-        //==============внутренние функции==============
-        /// <summary>
-        /// Отключение телефона
-        /// </summary>
         public void StopPhone()
         {
-            EndCall();
-            StopFlag = true;
-            ThreadListen.Suspend();
-            SendSocket("127.0.0.1", port, "quit");
-            if (Sessions.Count > 0) Sessions.Last().BYECompile();
-            Sessions.Clear();
+            this.EndCall();
+            global::SIPLib.Listener.StopFlag = true;
+            this.ThreadListen.Suspend();
+            this.SendSocket("127.0.0.1", port, "quit");
+            if (Sessions.Count > 0) { global::SIPLib.Listener.Last().BYECompile(); }
+            global::SIPLib.Listener.Sessions.Clear();
         }
-        /// <summary>
-        /// Функция закрытия сессии
-        /// </summary>
-        /// <param name="name">Имя, с кем закрываем сессию</param>
-        private void CloseSession(string name)
-        {
-            Sessions.Clear();
-        }
-        /// <summary>
-        /// Прослушивание входящих запросов
-        /// </summary>
-        static void ListenSockets()
-        {
-            lock (LockListen)
-            {
-                UdpClient receivingUdpClient = new UdpClient(port);
 
+        private static void ListenSockets()
+        {
+            lock (global::SIPLib.Listener.LockListen)
+            {
+                global::System.Net.Sockets.UdpClient receivingUdpClient = new global::System.Net.Sockets.UdpClient(global::SIPLib.Listener.port);
                 try
                 {
-                    System.Net.IPEndPoint RemoteIpEndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0);
+                    global::System.Net.IPEndPoint RemoteIpEndPoint = new global::System.Net.IPEndPoint(global::System.Net.IPAddress.Any, 0);
                     while (true)
                     {
-                        Byte[] receiveBytes = receivingUdpClient.Receive(ref RemoteIpEndPoint);
-                        WatchInfo(receiveBytes);
-                        if (StopFlag == true) break;
+                        byte[] receiveBytes = receivingUdpClient.Receive(ref RemoteIpEndPoint);
+                        global::SIPLib.Listener.WatchInfo(receiveBytes);
+                        if (global::SIPLib.Listener.StopFlag == true) { break; }
                     }
                 }
-                catch (Exception)
+                catch
                 {
                     receivingUdpClient.Close();
                     return;
@@ -704,321 +346,191 @@ namespace SIPLib
                 receivingUdpClient.Close();
             }
         }
-        /// <summary>
-        /// Разборка приходящих запросов
-        /// </summary>
-        /// <param name="receiveBytes">Содержание запроса в виде потока байт</param>
-        /// <returns>true если запрос правильный и адресован нам, иначе - false</returns>
-        static bool WatchInfo(Byte[] receiveBytes)
+
+        private static bool WatchInfo(byte[] receiveBytes)
         {
-            Mut.WaitOne();  //<=====будет использоваться при многоканальной связи
-            string Info = Encoding.ASCII.GetString(receiveBytes);
-
-            string From = Info.Substring(Info.IndexOf("From: "), Info.IndexOf('\n', Info.IndexOf("From: ")) - Info.IndexOf("From: "));    //выделяем строку From
-            string tmp = "", tmp2 = "", tmp3 = "", tmp4 = "", SDP = "";
-
-            if (From.Length <= 0)
-            {
-                return false;
-            }
-
+            global::SIPLib.Listener.Mut.WaitOne();
+            string Info = global::System.Text.Encoding.ASCII.GetString(receiveBytes);
+            string From = Info.Substring(Info.IndexOf("From: "), Info.IndexOf('\n', Info.IndexOf("From: ")) - Info.IndexOf("From: "));
+            if (From.Length <= 0) { return false; }
             From = From.Remove(0, From.IndexOf("sip: ") + "sip: ".Length);
             From = From.Remove(From.IndexOf('>'));
-
-            tmp = Info.Remove(0, Info.IndexOf("To"));
+            string tmp = Info.Remove(0, Info.IndexOf("To"));
             tmp = tmp.Remove(tmp.IndexOf('@'));
             tmp = tmp.Remove(0, tmp.IndexOf("sip: ") + "sip: ".Length);
-
-            DelOutput(Info, "Пришло");
-
+            global::SIPLib.Listener.DelOutput(Info, "HERE");
             if (tmp == myName)
             {
                 if (Info.Contains("BYE "))
                 {
-                    Delstoplistener();
-                    Sessions.Last().WatchInfo(Info);
+                    global::SIPLib.Listener.Delstoplistener();
+                    global::SIPLib.Listener.Last().WatchInfo(Info);
                 }
                 if (Info.Contains("INVITE "))
                 {
-                    tmp4 = Info.Remove(0, Info.IndexOf("From:"));
+                    string tmp4 = Info.Remove(0, Info.IndexOf("From:"));
                     tmp4 = tmp4.Remove(tmp4.IndexOf('>'));
                     tmp4 = tmp4.Remove(0, tmp4.IndexOf('@') + 1);
-
-                    tmp2 = Info.Remove(0, Info.IndexOf("To: <sip: ") + "To: <sip: ".Length);
+                    string tmp2 = Info.Remove(0, Info.IndexOf("To: <sip: ") + "To: <sip: ".Length);
                     tmp2 = tmp2.Remove(tmp2.IndexOf('>'));
                     tmp2 = tmp2.Remove(tmp2.IndexOf('@'));
-
-                    tmp3 = Info.Remove(0, Info.IndexOf("Call-ID"));
+                    string tmp3 = Info.Remove(0, Info.IndexOf("Call-ID"));
                     tmp3 = tmp3.Remove(tmp3.IndexOf('\n'));
-
-
-
-                    SDP = Info.Remove(0, Info.IndexOf("Content-Length"));
+                    string SDP = Info.Remove(0, Info.IndexOf("Content-Length"));
                     SDP = SDP.Remove(0, SDP.IndexOf("\n\n") + 2);
-
-                    Sessions.Add(new Session(System.Net.Dns.GetHostByName(System.Net.Dns.GetHostName()).AddressList[0], port, tmp4, From.Remove(From.IndexOf('@')), tmp2, DelClosesession, tmp3, SDP));
-                    Sessions.Last()._1XXCompile("01");
-
-                    if (DelRequest1(From) == true)
-                    {
-                        Sessions.Last()._2XXCompile("00", true, false);
-                    }
+                    global::SIPLib.Listener.Sessions.Add(new global::SIPLib.Session(global::System.Net.Dns.GetHostEntry(global::System.Net.Dns.GetHostName()).AddressList[0], port, tmp4, From.Remove(From.IndexOf('@')), tmp2, DelClosesession, tmp3, SDP));
+                    global::SIPLib.Listener.Last()._1XXCompile("01");
+                    if (global::SIPLib.Listener.DelRequest1(From) == true) { global::SIPLib.Listener.Last()._2XXCompile("00", true, false); }
                     else
                     {
-                        Sessions.Add(new Session(System.Net.Dns.GetHostByName(System.Net.Dns.GetHostName()).AddressList[0], port, tmp, tmp2, From.Remove(From.IndexOf('@')), DelClosesession, tmp3, ""));
-                        Sessions.Last()._6XXCompile("03", false, true);
-                        Sessions.Remove(Sessions.Last());
+                        global::SIPLib.Listener.Sessions.Add(new global::SIPLib.Session(global::System.Net.Dns.GetHostEntry(global::System.Net.Dns.GetHostName()).AddressList[0], port, tmp, tmp2, From.Remove(From.IndexOf('@')), DelClosesession, tmp3, string.Empty));
+                        global::SIPLib.Listener.Last()._6XXCompile("03", false, true);
+                        global::SIPLib.Listener.Sessions.Remove(global::SIPLib.Listener.Last());
                     }
-
-
                 }
                 else
                 {
                     tmp = Info.Remove(0, Info.IndexOf("Call-ID"));
                     tmp = tmp.Remove(tmp.IndexOf('\n'));
-
-                    foreach (Session s in Sessions)
-                    {
-                        if (s.CheckSessionByID(tmp))
-                        {
-                            s.WatchInfo(Info);
-                        }
-                    }
+                    foreach (global::SIPLib.Session s in Sessions) { if (s.CheckSessionByID(tmp)) { s.WatchInfo(Info); } }
                 }
             }
-
-            Mut.ReleaseMutex();
+            global::SIPLib.Listener.Mut.ReleaseMutex();
             return true;
         }
-        /// <summary>
-        /// Функция отправки пакета данных
-        /// </summary>
-        /// <param name="ToIP">IP получателя</param>
-        /// <param name="port">порт получателя</param>
-        /// <param name="Info">Сама информация</param>
-        /// <returns>Если отправка прошла успешно - возвратит true, иначе - false</returns>
-        bool SendSocket(string ToIP, int port, string Info)
+
+        private bool SendSocket(string ToIP, int port, string Info)
         {
-            System.Net.IPAddress ipAddress;
-            UdpClient udpClient = new UdpClient();
-            Byte[] sendBytes = Encoding.ASCII.GetBytes(Info);
-
-            if (!System.Net.IPAddress.TryParse(ToIP, out ipAddress))
-            {
-                return false;
-            };
-
-            System.Net.IPEndPoint ipEndPoint = new System.Net.IPEndPoint(ipAddress, port);
-
-            try
-            {
-                udpClient.Send(sendBytes, sendBytes.Length, ipEndPoint); //посылаем информацию
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-
+            global::System.Net.Sockets.UdpClient udpClient = new global::System.Net.Sockets.UdpClient();
+            byte[] sendBytes = global::System.Text.Encoding.ASCII.GetBytes(Info);
+            global::System.Net.IPAddress ipAddress = null;
+            if (!System.Net.IPAddress.TryParse(ToIP, out ipAddress)) { return false; };
+            global::System.Net.IPEndPoint ipEndPoint = new global::System.Net.IPEndPoint(ipAddress, port);
+            try { udpClient.Send(sendBytes, sendBytes.Length, ipEndPoint); }
+            catch { return false; }
             return true;
         }
 
+        public Listener(int newport, global::SIPLib.DelRequest d1, string name, global::SIPLib.DelCloseSession d2, global::SIPLib.Del OUT, global::SIPLib.DelStopListener DelSL)
+        {
+            global::SIPLib.Listener.DelRequest1 = d1;
+            global::SIPLib.Listener.DelClosesession = d2;
+            global::SIPLib.Listener.DelOutput = OUT;
+            global::SIPLib.Listener.DelClosesession += CloseSession;
+            global::SIPLib.Listener.Delstoplistener = DelSL;
+            global::SIPLib.Listener.StopFlag = false;
+            global::SIPLib.Listener.myName = name;
+            this.myIP = global::System.Net.Dns.GetHostEntry(host).AddressList[0];
+            global::SIPLib.Listener.port = newport;
+            this.ThreadListen = new global::System.Threading.Thread(global::SIPLib.Listener.ListenSockets);
+            this.ThreadListen.Start();
+        }
     }
 
-
-    //=======================================================================================================================
-    //=======================================================================================================================
-    //=======================================================================================================================
-
-
-    /// <summary>
-    /// Конструктор телефонной трубки
-    /// </summary>
     public class Player
     {
-        private WaveLib.WaveOutPlayer m_Player;
-        private WaveLib.WaveInRecorder m_Recorder;
-        private WaveLib.FifoStream m_Fifo = new WaveLib.FifoStream();
-
+        private global::WaveLib.WaveOutPlayer m_Player;
+        private global::WaveLib.WaveInRecorder m_Recorder;
+        private global::WaveLib.FifoStream m_Fifo = new global::WaveLib.FifoStream();
         private byte[] m_PlayBuffer;
         private byte[] m_RecBuffer;
         private int _portReceive;
         private string _ToIP;
+        private object LockSend = new object();
+        private object LockReceive = new object();
+        private global::System.Threading.Thread ThreadListen;
 
-        Object LockSend = new Object();
-        Object LockReceive = new Object();
-        Thread ThreadListen;
-
-        /// <summary>
-        /// Конструктор телефонной трубки (ничего лучше в голову не пришло)
-        /// </summary>
-        /// <param name="toip">IP собеседника</param>
-        /// <param name="pr">Порт собеседника</param>
-        public Player(string toip, int pr)
+        private void Filler(global::System.IntPtr data, int size)
         {
-
-            _portReceive = pr;
-            _ToIP = toip;
-
-            ThreadListen = new Thread(DataReceive);
-            ThreadListen.Start();
-            ThreadListen.Suspend();
+            if (this.m_PlayBuffer == null || this.m_PlayBuffer.Length < size) { this.m_PlayBuffer = new byte[size]; }
+            if (this.m_Fifo.Length >= size) { this.m_Fifo.Read(this.m_PlayBuffer, 0, size); } else { for (int i = 0; i < this.m_PlayBuffer.Length; i++) { this.m_PlayBuffer[i] = 0; } }
+            global::System.Runtime.InteropServices.Marshal.Copy(this.m_PlayBuffer, 0, data, size);
         }
 
-        /// <summary>
-        /// Функция воспроизведения звука
-        /// </summary>
-        /// <param name="data">Информация</param>
-        /// <param name="size">Размер информации</param>
-        private void Filler(IntPtr data, int size)
+        private void DataArrived(byte[] data, int size)
         {
-            if (m_PlayBuffer == null || m_PlayBuffer.Length < size)
-                m_PlayBuffer = new byte[size];
-            if (m_Fifo.Length >= size)
-                m_Fifo.Read(m_PlayBuffer, 0, size);
-            else
-                for (int i = 0; i < m_PlayBuffer.Length; i++)
-                    m_PlayBuffer[i] = 0;
-            System.Runtime.InteropServices.Marshal.Copy(m_PlayBuffer, 0, data, size);
+            if (this.m_RecBuffer == null || this.m_RecBuffer.Length < size) { this.m_RecBuffer = new byte[size]; }
+            data.CopyTo(this.m_RecBuffer, 0);
+            this.m_Fifo.Write(this.m_RecBuffer, 0, this.m_RecBuffer.Length);
         }
 
-        /// <summary>
-        /// Функция записи звука
-        /// </summary>
-        /// <param name="data">Информация</param>
-        /// <param name="size">Размер информации</param>
-        private void DataArrived(Byte[] data, int size)
+        private void DataSend(global::System.IntPtr data, int size)
         {
-            if (m_RecBuffer == null || m_RecBuffer.Length < size)
-                m_RecBuffer = new byte[size];
-            data.CopyTo(m_RecBuffer, 0); 
-            m_Fifo.Write(m_RecBuffer, 0, m_RecBuffer.Length);
-        }
-        /// <summary>
-        /// Функция отправки звуковых данных
-        /// </summary>
-        /// <param name="data">Звуковые данные</param>
-        /// <param name="size">Размер данных</param>
-        private void DataSend(IntPtr data, int size)
-        {
-            lock (LockSend)
+            lock (this.LockSend)
             {
                 byte[] tmpBuffer = new byte[size];
-                System.Runtime.InteropServices.Marshal.Copy(data, tmpBuffer, 0, size);
-                SendSocket(_ToIP, _portReceive, tmpBuffer);
+                global::System.Runtime.InteropServices.Marshal.Copy(data, tmpBuffer, 0, size);
+                this.SendSocket(this._ToIP, this._portReceive, tmpBuffer);
             }
         }
-        /// <summary>
-        /// Получение и запись звука
-        /// </summary>
+
         private void DataReceive()
         {
-            lock (LockReceive)
+            lock (this.LockReceive)
             {
-                UdpClient receivingUdpClient = new UdpClient(_portReceive);
-                System.Net.IPAddress ipAddress;
-                System.Net.IPAddress.TryParse(_ToIP, out ipAddress);
+                global::System.Net.Sockets.UdpClient receivingUdpClient = new global::System.Net.Sockets.UdpClient(this._portReceive);
+                global::System.Net.IPAddress ipAddress;
+                global::System.Net.IPAddress.TryParse(this._ToIP, out ipAddress);
                 try
                 {
-                    System.Net.IPEndPoint RemoteIpEndPoint = new System.Net.IPEndPoint(ipAddress, _portReceive);
-
+                    global::System.Net.IPEndPoint RemoteIpEndPoint = new global::System.Net.IPEndPoint(ipAddress, this._portReceive);
                     while (true)
                     {
-                        Byte[] receiveBytes = receivingUdpClient.Receive(ref RemoteIpEndPoint);
-                        DataArrived(receiveBytes, receiveBytes.Length);
+                        byte[] receiveBytes = receivingUdpClient.Receive(ref RemoteIpEndPoint);
+                        this.DataArrived(receiveBytes, receiveBytes.Length);
                     }
-                }
-                catch (Exception)
-                {
-                    return;
-                }
+                } catch { /* NOTHING */ }
             }
         }
-        /// <summary>
-        /// Конец записи/воспроизведения звука
-        /// </summary>
+
         public void Stop()
         {
-            ThreadListen.Suspend();
-            if (m_Player != null)
-                try
-                {
-                    m_Player.Dispose();
-                }
-                finally
-                {
-                    m_Player = null;
-                }
-            if (m_Recorder != null)
-                try
-                {
-                    m_Recorder.Dispose();
-                }
-                finally
-                {
-                    m_Recorder = null;
-                }
-            m_Fifo.Flush();
+            this.ThreadListen.Suspend();
+            if (this.m_Player != null) { try { this.m_Player.Dispose(); } finally { this.m_Player = null; } }
+            if (this.m_Recorder != null) { try { this.m_Recorder.Dispose(); } finally { this.m_Recorder = null; } }
+            this.m_Fifo.Flush();
         }
 
-        /// <summary>
-        /// Начало записи/воспроизведения звука
-        /// </summary>
         public void Start()
         {
-            Stop();
-            ThreadListen.Resume();
+            this.Stop();
+            this.ThreadListen.Resume();
             try
             {
-                WaveLib.WaveFormat fmt = new WaveLib.WaveFormat(22050, 16, 2);
-                m_Player = new WaveLib.WaveOutPlayer(-1, fmt, 32000, 5, new WaveLib.BufferFillEventHandler(Filler));
-                m_Recorder = new WaveLib.WaveInRecorder(-1, fmt, 32000, 5, new WaveLib.BufferDoneEventHandler(DataSend));
+                global::WaveLib.WaveFormat fmt = new global::WaveLib.WaveFormat(22050, 16, 2);
+                this.m_Player = new global::WaveLib.WaveOutPlayer(-1, fmt, 32000, 5, new global::WaveLib.BufferEventHandler(this.Filler));
+                this.m_Recorder = new global::WaveLib.WaveInRecorder(-1, fmt, 32000, 5, new global::WaveLib.BufferEventHandler(this.DataSend));
             }
             catch
             {
-                Stop();
+                this.Stop();
                 throw;
             }
         }
-        /// <summary>
-        /// Отправка информации
-        /// </summary>
-        /// <param name="ToIP">IP получателя</param>
-        /// <param name="port">Порт получателя</param>
-        /// <param name="Info">Информация</param>
-        /// <returns>Если отправка успешна - вернёт true, иначе - false</returns>
-        bool SendSocket(string ToIP, int port, Byte[] sendBytes)
+
+        private bool SendSocket(string ToIP, int port, byte[] sendBytes)
         {
-            System.Net.IPAddress ipAddress;
-
-            UdpClient udpClient = new UdpClient();
-
-            if (!System.Net.IPAddress.TryParse(ToIP, out ipAddress))
-            {
-                return false;
-            };
-
-            System.Net.IPEndPoint ipEndPoint = new System.Net.IPEndPoint(ipAddress, port);
-
-            try
-            {
-                udpClient.Send(sendBytes, sendBytes.Length, ipEndPoint);
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-
+            global::System.Net.IPAddress ipAddress;
+            global::System.Net.Sockets.UdpClient udpClient = new global::System.Net.Sockets.UdpClient();
+            if (!System.Net.IPAddress.TryParse(ToIP, out ipAddress)) { return false; };
+            global::System.Net.IPEndPoint ipEndPoint = new global::System.Net.IPEndPoint(ipAddress, port);
+            try { udpClient.Send(sendBytes, sendBytes.Length, ipEndPoint); } catch { return false; }
             return true;
         }
-        /// <summary>
-        /// Функция установки параметров трубки
-        /// </summary>
-        /// <param name="toip">IP собеседника</param>
-        /// <param name="pr">Порт собеседника</param>
+
         public void SetOptions(string toip, int pr)
         {
-            _portReceive = pr;
-            _ToIP = toip;
+            this._portReceive = pr;
+            this._ToIP = toip;
+        }
+
+        public Player(string toip, int pr)
+        {
+            this._portReceive = pr;
+            this._ToIP = toip;
+            this.ThreadListen = new global::System.Threading.Thread(this.DataReceive);
+            this.ThreadListen.Start();
+            this.ThreadListen.Suspend();
         }
     }
 }
