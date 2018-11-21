@@ -368,7 +368,7 @@ namespace WaveLib
             public global::WaveLib.WaveNative.WaveOutBuffer NextBuffer;
             private global::System.Threading.AutoResetEvent m_PlayEvent;
             private global::System.IntPtr m_WaveOut;
-            private WaveNative.WaveHdr m_Header;
+            private global::WaveLib.WaveNative.WaveHdr m_Header;
             private byte[] m_HeaderData;
             private global::System.Runtime.InteropServices.GCHandle m_HeaderHandle;
             private global::System.Runtime.InteropServices.GCHandle m_HeaderDataHandle;
