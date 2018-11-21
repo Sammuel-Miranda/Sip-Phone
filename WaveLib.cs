@@ -10,21 +10,21 @@ namespace WaveLib
 {
     public delegate void BufferEventHandler(global::System.IntPtr data, int size);
 
-	public class FifoStream : global::System.IO.Stream
-	{
-		private const int BlockSize = 65536;
+    public class FifoStream : global::System.IO.Stream
+    {
+        private const int BlockSize = 65536;
         private const int MaxBlocksInCache = ((3 * 1024 * 1024) / global::WaveLib.FifoStream.BlockSize); //48
-		private int m_Size;
-		private int m_RPos;
-		private int m_WPos;
+        private int m_Size;
+        private int m_RPos;
+        private int m_WPos;
         private global::System.Collections.Stack m_UsedBlocks = new global::System.Collections.Stack();
         private global::System.Collections.ArrayList m_Blocks = new global::System.Collections.ArrayList(); 
-		private byte[] AllocBlock() { return this.m_UsedBlocks.Count > 0 ? (byte[])this.m_UsedBlocks.Pop() : new byte[global::WaveLib.FifoStream.BlockSize]; }
-		private void FreeBlock(byte[] block) { if (this.m_UsedBlocks.Count < global::WaveLib.FifoStream.MaxBlocksInCache) { this.m_UsedBlocks.Push(block); } }
+        private byte[] AllocBlock() { return this.m_UsedBlocks.Count > 0 ? (byte[])this.m_UsedBlocks.Pop() : new byte[global::WaveLib.FifoStream.BlockSize]; }
+        private void FreeBlock(byte[] block) { if (this.m_UsedBlocks.Count < global::WaveLib.FifoStream.MaxBlocksInCache) { this.m_UsedBlocks.Push(block); } }
 
-		private byte[] GetWBlock()
-		{
-			byte[] Result = null;
+        private byte[] GetWBlock()
+        {
+            byte[] Result = null;
             if (this.m_WPos < global::WaveLib.FifoStream.BlockSize && this.m_Blocks.Count > 0) { Result = (byte[])this.m_Blocks[this.m_Blocks.Count - 1]; }
             else
             {
@@ -32,84 +32,84 @@ namespace WaveLib
                 this.m_Blocks.Add(Result);
                 this.m_WPos = 0;
             }
-			return Result;
-		}
+            return Result;
+        }
 
-		public override void Flush()
-		{
-			lock(this)
-			{
+        public override void Flush()
+        {
+            lock(this)
+            {
                 foreach (byte[] block in this.m_Blocks) { this.FreeBlock(block); }
                 this.m_Blocks.Clear();
                 this.m_RPos = 0;
                 this.m_WPos = 0;
                 this.m_Size = 0;
-			}
-		}
+            }
+        }
 
-		public override void Write(byte[] buf, int ofs, int count)
-		{
-			lock(this)
-			{
-				int Left = count;
-				while (Left > 0)
-				{
+        public override void Write(byte[] buf, int ofs, int count)
+        {
+            lock(this)
+            {
+                int Left = count;
+                while (Left > 0)
+                {
                     int ToWrite = global::System.Math.Min(global::WaveLib.FifoStream.BlockSize - this.m_WPos, Left);
                     global::System.Array.Copy(buf, ofs + count - Left, this.GetWBlock(), this.m_WPos, ToWrite);
-					this.m_WPos += ToWrite;
-					Left -= ToWrite;
-				}
-				this.m_Size += count;
-			}
-		}
+                    this.m_WPos += ToWrite;
+                    Left -= ToWrite;
+                }
+                this.m_Size += count;
+            }
+        }
 
-		public int Advance(int count)
-		{
-			lock(this)
-			{
-				int SizeLeft = count;
-				while (SizeLeft > 0 && this.m_Size > 0)
-				{
+        public int Advance(int count)
+        {
+            lock(this)
+            {
+                int SizeLeft = count;
+                while (SizeLeft > 0 && this.m_Size > 0)
+                {
                     if (this.m_RPos == global::WaveLib.FifoStream.BlockSize)
-					{
+                    {
                         this.m_RPos = 0;
                         this.FreeBlock((byte[])this.m_Blocks[0]);
                         this.m_Blocks.RemoveAt(0);
-					}
+                    }
                     int ToFeed = this.m_Blocks.Count == 1 ? global::System.Math.Min(this.m_WPos - this.m_RPos, SizeLeft) : global::System.Math.Min(global::WaveLib.FifoStream.BlockSize - this.m_RPos, SizeLeft);
                     this.m_RPos += ToFeed;
-					SizeLeft -= ToFeed;
+                    SizeLeft -= ToFeed;
                     this.m_Size -= ToFeed;
-				}
-				return count - SizeLeft;
-			}
-		}
+                }
+                return count - SizeLeft;
+            }
+        }
 
-		public int Peek(byte[] buf, int ofs, int count)
-		{
-			lock(this)
-			{
-				int SizeLeft = count;
-				int TempBlockPos = this.m_RPos;
+        public int Peek(byte[] buf, int ofs, int count)
+        {
+            lock(this)
+            {
+                int SizeLeft = count;
+                int TempBlockPos = this.m_RPos;
                 int TempSize = this.m_Size;
-				int CurrentBlock = 0;
-				while (SizeLeft > 0 && TempSize > 0)
-				{
-					if (TempBlockPos == BlockSize)
-					{
-						TempBlockPos = 0;
-						CurrentBlock++;
-					}
+                int CurrentBlock = 0;
+                while (SizeLeft > 0 && TempSize > 0)
+                {
+                    if (TempBlockPos == BlockSize)
+                    {
+                        TempBlockPos = 0;
+                        CurrentBlock++;
+                    }
                     int Upper = CurrentBlock < this.m_Blocks.Count - 1 ? global::WaveLib.FifoStream.BlockSize : this.m_WPos;
                     int ToFeed = global::System.Math.Min(Upper - TempBlockPos, SizeLeft);
                     global::System.Array.Copy((byte[])this.m_Blocks[CurrentBlock], TempBlockPos, buf, ofs + count - SizeLeft, ToFeed);
-					SizeLeft -= ToFeed;
-					TempBlockPos += ToFeed;
-					TempSize -= ToFeed;
-				}
-				return count - SizeLeft;
-			}
-		}
+                    SizeLeft -= ToFeed;
+                    TempBlockPos += ToFeed;
+                    TempSize -= ToFeed;
+                }
+                return count - SizeLeft;
+            }
+        }
 
         public override int Read(byte[] buf, int ofs, int count)
         {
@@ -129,7 +129,7 @@ namespace WaveLib
         public override void Close() { this.Flush(); }
         public override void SetLength(long len) { throw new global::System.InvalidOperationException(); }
         public override long Seek(long pos, global::System.IO.SeekOrigin o) { throw new global::System.InvalidOperationException(); }
-	}
+    }
 
     public enum WaveFormats : int
     {
